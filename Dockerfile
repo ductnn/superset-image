@@ -1,46 +1,53 @@
 FROM apache/superset
-# We switch to root
+
+# Switch to root user
 USER root
 
+# Install Tini
 ENV TINI_VERSION v0.19.0
-RUN curl --show-error --location --output /tini https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-amd64
-RUN chmod +x /tini
+RUN curl --silent --show-error --location --output /tini https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-amd64 \
+    && chmod +x /tini
 
-RUN 	curl --silent --show-error https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip && \
-        curl --silent --show-error --location --output /tmp/amazon-ssm-agent.deb https://s3.us-east-1.amazonaws.com/amazon-ssm-us-east-1/latest/debian_amd64/amazon-ssm-agent.deb && \
-        unzip /tmp/awscliv2.zip && \
-        dpkg -i /tmp/amazon-ssm-agent.deb && \
-        ./aws/install && \
-        rm -rf /tmp/awscliv2.zip && \
-        set -ex \
-        && apt-get update \
-        && apt-get install -qq -y --no-install-recommends \
-        sudo \
-        make \
-        unzip \
-        curl \
-        jq \
-        && rm -rf /var/lib/apt/lists/* \
-        && usermod -aG sudo superset \
-        && echo "superset ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-# We install the Python interface for Redis
+# Install AWS CLI, Amazon SSM Agent, and additional utilities
+RUN curl --silent --show-error --location --output /tmp/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
+    && curl --silent --show-error --location --output /tmp/amazon-ssm-agent.deb https://s3.us-east-1.amazonaws.com/amazon-ssm-us-east-1/latest/debian_amd64/amazon-ssm-agent.deb \
+    && apt-get update --fix-missing \
+    && apt-get install -qq -y --no-install-recommends \
+       sudo \
+       make \
+       unzip \
+       curl \
+       jq \
+       libpq-dev\
+       python3-dev \
+    && dpkg -i /tmp/amazon-ssm-agent.deb \
+    && unzip /tmp/awscliv2.zip \
+    && ./aws/install \
+    && rm -rf /tmp/awscliv2.zip /tmp/amazon-ssm-agent.deb /var/lib/apt/lists/* \
+    && usermod -aG sudo superset \
+    && echo "superset ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Install Python requirements
 COPY local_requirements.txt .
-RUN pip install -r local_requirements.txt
-# We add the superset_config.py file to the container
+RUN pip install --no-cache-dir -r local_requirements.txt
+
+RUN pip install --no-cache-dir psycopg2-binary
+
+# Add and configure Superset
 COPY superset_config.py /app/
-# We tell Superset where to find it
 ENV SUPERSET_CONFIG_PATH /app/superset_config.py
+
+# Add entrypoint and initialization scripts
 COPY /docker/superset-entrypoint.sh /app/docker/
 COPY /docker/docker-bootstrap.sh /app/docker/
-COPY /docker/docker-init.sh /app/docker
+COPY /docker/docker-init.sh /app/docker/
 COPY /docker/docker-entrypoint.sh /app/docker/
 
-# We give permissions to different files
-RUN chmod +x /app/docker/superset-entrypoint.sh
-RUN chmod +x /app/docker/docker-entrypoint.sh
-RUN chmod +x /app/docker/docker-init.sh
-RUN chmod +x /app/docker/docker-bootstrap.s
+# Set execute permissions for scripts
+RUN chmod +x /app/docker/*.sh
 
-# We switch back to the `superset` user
+# Switch back to superset user
 USER superset
-ENTRYPOINT ["/tini", "-g", "--","/app/docker/docker-entrypoint.sh"]
+
+# Set entrypoint
+ENTRYPOINT ["/tini", "-g", "--", "/app/docker/docker-entrypoint.sh"]
